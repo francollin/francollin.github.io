@@ -1,0 +1,60 @@
+2026-01-27 11:00:29 - Received: Array
+(
+    [username] => montana
+    [password] => mon123
+)
+
+Looking for user: montana
+Found 1 users
+Verifying password...
+Stored hash: $2y$10$C1wPJqpTZ9VuK...
+Password verification SUCCESS
+Session created for user_id: 8
+2026-01-27 11:00:47 - Received: Array
+(
+    [username] => king
+    [password] => king123
+)
+
+Looking for user: king
+Found 1 users
+Verifying password...
+Stored hash: $2y$10$9yxeen7tYfHai...
+Password verification SUCCESS
+Session created for user_id: 10
+2026-01-27 11:01:37 - Received: Array
+(
+    [username] => king
+    [password] => king123
+)
+
+Looking for user: king
+Found 1 users
+Verifying password...
+Stored hash: $2y$10$9yxeen7tYfHai...
+Password verification SUCCESS
+Session created for user_id: 10
+2026-01-27 11:57:36 - Received: Array
+(
+    [username] => king
+    [password] => king123
+)
+
+Looking for user: king
+Found 1 users
+Verifying password...
+Stored hash: $2y$10$9yxeen7tYfHai...
+Password verification SUCCESS
+Session created for user_id: 10
+2026-01-27 14:44:29 - Received: Array
+(
+    [username] => king
+    [password] => king123
+)
+
+Looking for user: king
+Found 1 users
+Verifying password...
+Stored hash: $2y$10$9yxeen7tYfHai...
+Password verification SUCCESS
+Session created for user_id: 10

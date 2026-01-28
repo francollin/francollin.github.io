@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E-Commerce Platform</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Header & Navigation -->
+    <header id="header">
+        <nav class="navbar">
+            <div class="container">
+                <div class="nav-brand">
+                    <h1>ShopHub</h1>
+                </div>
+                <div class="nav-menu">
+                    <a href="#" onclick="showSection('products'); return false;">Products</a>
+                    <span id="auth-links">
+                        <a href="#" onclick="showSection('login'); return false;">Login</a>
+                        <a href="#" onclick="showSection('register'); return false;">Register</a>
+                    </span>
+                    <span id="user-links" style="display: none;">
+                        <a href="#" onclick="showSection('orders'); return false;">My Orders</a>
+                        <span id="admin-link" style="display: none;">
+                            <a href="#" onclick="showSection('admin'); return false;">Admin</a>
+                        </span>
+                        <a href="#" onclick="logout(); return false;">Logout</a>
+                        <span id="user-name"></span>
+                    </span>
+                    <div class="cart-icon" onclick="showSection('cart')">
+                        🛒 <span id="cart-count">0</span>
+                    </div>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Main Content -->
+    <main id="main-content">
+        <!-- Products Section -->
+        <section id="products-section" class="section active">
+            <div class="container">
+                <h2>Products</h2>
+                
+                <!-- Search and Filter -->
+                <div class="filter-bar">
+                    <input type="text" id="search-input" placeholder="Search products...">
+                    <select id="category-filter">
+                        <option value="">All Categories</option>
+                    </select>
+                    <input type="number" id="min-price" placeholder="Min Price">
+                    <input type="number" id="max-price" placeholder="Max Price">
+                    <select id="sort-select">
+                        <option value="product_name">Name</option>
+                        <option value="price">Price</option>
+                        <option value="created_at">Newest</option>
+                    </select>
+                    <button onclick="filterProducts()">Filter</button>
+                </div>
+
+                <!-- Products Grid -->
+                <div id="products-grid" class="products-grid"></div>
+            </div>
+        </section>
+
+        <!-- Product Detail Section -->
+        <section id="product-detail-section" class="section">
+            <div class="container">
+                <button onclick="showSection('products')" class="btn-back">← Back to Products</button>
+                <div id="product-detail"></div>
+            </div>
+        </section>
+
+        <!-- Cart Section -->
+        <section id="cart-section" class="section">
+            <div class="container">
+                <h2>Shopping Cart</h2>
+                <div id="cart-items"></div>
+                <div id="cart-total"></div>
+                <div id="checkout-form" style="display: none;">
+                    <h3>Checkout</h3>
+                    <textarea id="shipping-address" placeholder="Enter shipping address" required></textarea>
+                    <button onclick="placeOrder()" class="btn-primary">Place Order</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Login Section -->
+        <section id="login-section" class="section">
+            <div class="container">
+                <div class="form-container">
+                    <h2>Login</h2>
+                    <form id="login-form" onsubmit="handleLogin(event)">
+                        <input type="text" id="login-username" placeholder="Username or Email" required>
+                        <input type="password" id="login-password" placeholder="Password" required>
+                        <button type="submit" class="btn-primary">Login</button>
+                    </form>
+                    <p>Don't have an account? <a href="#" onclick="showSection('register'); return false;">Register</a></p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Register Section -->
+        <section id="register-section" class="section">
+            <div class="container">
+                <div class="form-container">
+                    <h2>Register</h2>
+                    <form id="register-form" onsubmit="handleRegister(event)">
+                        <input type="text" id="reg-username" placeholder="Username" required>
+                        <input type="email" id="reg-email" placeholder="Email" required>
+                        <input type="password" id="reg-password" placeholder="Password (min 6 characters)" required>
+                        <input type="text" id="reg-fullname" placeholder="Full Name" required>
+                        <input type="tel" id="reg-phone" placeholder="Phone (optional)">
+                        <button type="submit" class="btn-primary">Register</button>
+                    </form>
+                    <p>Already have an account? <a href="#" onclick="showSection('login'); return false;">Login</a></p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Orders Section -->
+        <section id="orders-section" class="section">
+            <div class="container">
+                <h2>My Orders</h2>
+                <div id="orders-list"></div>
+            </div>
+        </section>
+
+        <!-- Admin Section -->
+        <section id="admin-section" class="section">
+            <div class="container">
+                <h2>Admin Panel</h2>
+                <div class="admin-tabs">
+                    <button onclick="showAdminTab('products')" class="tab-btn active">Manage Products</button>
+                    <button onclick="showAdminTab('orders')" class="tab-btn">Manage Orders</button>
+                </div>
+                
+                <div id="admin-products" class="admin-tab active">
+                    <h3>Add New Product</h3>
+                    <form id="add-product-form" onsubmit="handleAddProduct(event)">
+                        <input type="text" id="product-name" placeholder="Product Name" required>
+                        <select id="product-category" required>
+                            <option value="">Select Category</option>
+                        </select>
+                        <textarea id="product-description" placeholder="Description"></textarea>
+                        <input type="number" id="product-price" placeholder="Price" step="0.01" required>
+                        <input type="number" id="product-stock" placeholder="Stock Quantity" required>
+                        <input type="text" id="product-image" placeholder="Image URL">
+                        <button type="submit" class="btn-primary">Add Product</button>
+                    </form>
+                    <h3>All Products</h3>
+                    <div id="admin-products-list"></div>
+                </div>
+                
+                <div id="admin-orders" class="admin-tab">
+                    <h3>All Orders</h3>
+                    <div id="admin-orders-list"></div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <p>&copy; 2026 ShopHub E-Commerce Platform. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
