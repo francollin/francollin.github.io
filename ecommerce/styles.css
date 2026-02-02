@@ -75,7 +75,7 @@ header {
     color: white;
     padding: 2px 8px;
     border-radius: 50%;
-    font-size: 0.9rem;
+    font-size: 0.8rem;
 }
 
 #user-name {
@@ -486,4 +486,5 @@ footer {
     .products-grid {
         grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     }
+
 }
