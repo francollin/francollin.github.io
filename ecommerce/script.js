@@ -637,21 +637,33 @@ async function deleteProduct(productId) {
     try {
         const response = await fetch(`${API_URL}/products.php?id=${productId}`, {
             method: 'DELETE',
-            credentials: 'include'
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('token')}` // If using tokens
+            }
         });
         
+        // Log response for debugging
+        console.log('DELETE Response:', response);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
         const data = await response.json();
+        console.log('DELETE Data:', data);
         
         if (data.success) {
-            alert('Product deleted');
+            alert('Product deleted successfully');
             loadProducts();
             loadAdminProducts();
         } else {
-            alert(data.message);
+            alert(`Error: ${data.message || 'Failed to delete product'}`);
         }
     } catch (error) {
         console.error('Error deleting product:', error);
-        alert('Failed to delete product');
+        alert(`Failed to delete product: ${error.message}`);
     }
 }
 
@@ -727,4 +739,5 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+
 }
