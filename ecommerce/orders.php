@@ -1,249 +1,485 @@
 <?php
-require_once '../config.php';
+require_once 'includes/config.php';
+require_once 'includes/functions.php';
 
-if (!Security::validateSession()) {
-    Response::unauthorized();
+if (!isLoggedIn()) {
+    redirect('auth/login.php', 'Please login to view your orders', 'error');
 }
 
-$db = new Database();
-$conn = $db->getConnection();
+$user_id = $_SESSION['user_id'];
+$page_title = "My Orders";
+$success = '';
+$error = '';
 
-$method = $_SERVER['REQUEST_METHOD'];
-$id = isset($_GET['id']) ? intval($_GET['id']) : null;
-$user = Security::getCurrentUser();
-
-switch ($method) {
-    case 'GET':
-        if ($id) {
-            getOrder($conn, $id, $user);
-        } else {
-            getOrders($conn, $user);
-        }
-        break;
-    
-    case 'POST':
-        createOrder($conn, $user);
-        break;
-    
-    case 'PUT':
-        if (!$id) {
-            Response::error('Order ID required');
-        }
-        updateOrderStatus($conn, $id, $user);
-        break;
-    
-    default:
-        Response::error('Method not allowed', 405);
-}
-
-function getOrders($conn, $user) {
-    $status = isset($_GET['status']) ? Security::sanitizeInput($_GET['status']) : null;
-    
-    if ($user['role'] === 'admin') {
-        $sql = "SELECT o.*, u.username, u.full_name 
-                FROM orders o
-                JOIN users u ON o.user_id = u.user_id
-                WHERE 1=1";
+// Check for flash messages
+$flashMessage = getFlashMessage();
+if ($flashMessage) {
+    if ($flashMessage['type'] === 'error') {
+        $error = $flashMessage['text'];
     } else {
-        $sql = "SELECT o.*, u.username, u.full_name 
-                FROM orders o
-                JOIN users u ON o.user_id = u.user_id
-                WHERE o.user_id = ?";
-    }
-    
-    $params = [];
-    $types = '';
-    
-    if ($user['role'] !== 'admin') {
-        $params[] = $user['user_id'];
-        $types .= 'i';
-    }
-    
-    if ($status) {
-        $sql .= " AND o.status = ?";
-        $params[] = $status;
-        $types .= 's';
-    }
-    
-    $sql .= " ORDER BY o.order_date DESC";
-    
-    $stmt = $conn->prepare($sql);
-    if ($params) {
-        $stmt->bind_param($types, ...$params);
-    }
-    $stmt->execute();
-    $result = $stmt->get_result();
-    
-    $orders = [];
-    while ($row = $result->fetch_assoc()) {
-        $orders[] = $row;
-    }
-    
-    Response::success('Orders retrieved', $orders);
-}
-
-function getOrder($conn, $id, $user) {
-    $sql = "SELECT o.*, u.username, u.full_name 
-            FROM orders o
-            JOIN users u ON o.user_id = u.user_id
-            WHERE o.order_id = ?";
-    
-    if ($user['role'] !== 'admin') {
-        $sql .= " AND o.user_id = ?";
-    }
-    
-    $stmt = $conn->prepare($sql);
-    
-    if ($user['role'] !== 'admin') {
-        $stmt->bind_param("ii", $id, $user['user_id']);
-    } else {
-        $stmt->bind_param("i", $id);
-    }
-    
-    $stmt->execute();
-    $result = $stmt->get_result();
-    
-    if ($result->num_rows === 0) {
-        Response::error('Order not found', 404);
-    }
-    
-    $order = $result->fetch_assoc();
-    
-    // Get order items
-    $stmt = $conn->prepare("
-        SELECT oi.*, p.product_name, p.image_url
-        FROM order_items oi
-        JOIN products p ON oi.product_id = p.product_id
-        WHERE oi.order_id = ?
-    ");
-    $stmt->bind_param("i", $id);
-    $stmt->execute();
-    $itemsResult = $stmt->get_result();
-    
-    $items = [];
-    while ($row = $itemsResult->fetch_assoc()) {
-        $items[] = $row;
-    }
-    
-    $order['items'] = $items;
-    
-    Response::success('Order retrieved', $order);
-}
-
-function createOrder($conn, $user) {
-    $data = json_decode(file_get_contents('php://input'), true);
-    
-    if (empty($data['items']) || empty($data['shipping_address'])) {
-        Response::error('Items and shipping address required');
-    }
-    
-    $shipping_address = Security::sanitizeInput($data['shipping_address']);
-    $items = $data['items'];
-    
-    // Start transaction
-    $conn->begin_transaction();
-    
-    try {
-        $total_amount = 0;
-        
-        // Validate items and calculate total
-        foreach ($items as $item) {
-            if (empty($item['product_id']) || empty($item['quantity'])) {
-                throw new Exception('Invalid item data');
-            }
-            
-            $product_id = intval($item['product_id']);
-            $quantity = intval($item['quantity']);
-            
-            if ($quantity <= 0) {
-                throw new Exception('Invalid quantity');
-            }
-            
-            // Check product availability
-            $stmt = $conn->prepare("SELECT price, stock_quantity FROM products WHERE product_id = ?");
-            $stmt->bind_param("i", $product_id);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            
-            if ($result->num_rows === 0) {
-                throw new Exception("Product ID $product_id not found");
-            }
-            
-            $product = $result->fetch_assoc();
-            
-            if ($product['stock_quantity'] < $quantity) {
-                throw new Exception("Insufficient stock for product ID $product_id");
-            }
-            
-            $total_amount += $product['price'] * $quantity;
-        }
-        
-        // Create order
-        $stmt = $conn->prepare("INSERT INTO orders (user_id, total_amount, shipping_address, status) VALUES (?, ?, ?, 'pending')");
-        $stmt->bind_param("ids", $user['user_id'], $total_amount, $shipping_address);
-        $stmt->execute();
-        $order_id = $conn->insert_id;
-        
-        // Add order items and update stock
-        foreach ($items as $item) {
-            $product_id = intval($item['product_id']);
-            $quantity = intval($item['quantity']);
-            
-            // Get product price
-            $stmt = $conn->prepare("SELECT price FROM products WHERE product_id = ?");
-            $stmt->bind_param("i", $product_id);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $product = $result->fetch_assoc();
-            
-            $unit_price = $product['price'];
-            $subtotal = $unit_price * $quantity;
-            
-            // Insert order item
-            $stmt = $conn->prepare("INSERT INTO order_items (order_id, product_id, quantity, unit_price, subtotal) VALUES (?, ?, ?, ?, ?)");
-            $stmt->bind_param("iiidd", $order_id, $product_id, $quantity, $unit_price, $subtotal);
-            $stmt->execute();
-            
-            // Update stock
-            $stmt = $conn->prepare("UPDATE products SET stock_quantity = stock_quantity - ? WHERE product_id = ?");
-            $stmt->bind_param("ii", $quantity, $product_id);
-            $stmt->execute();
-        }
-        
-        $conn->commit();
-        Response::success('Order created successfully', ['order_id' => $order_id, 'total_amount' => $total_amount]);
-        
-    } catch (Exception $e) {
-        $conn->rollback();
-        Response::error($e->getMessage());
+        $success = $flashMessage['text'];
     }
 }
 
-function updateOrderStatus($conn, $id, $user) {
-    if ($user['role'] !== 'admin') {
-        Response::forbidden('Admin access required');
-    }
-    
-    $data = json_decode(file_get_contents('php://input'), true);
-    
-    if (empty($data['status'])) {
-        Response::error('Status required');
-    }
-    
-    $status = Security::sanitizeInput($data['status']);
-    $allowedStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
-    
-    if (!in_array($status, $allowedStatuses)) {
-        Response::error('Invalid status');
-    }
-    
-    $stmt = $conn->prepare("UPDATE orders SET status = ? WHERE order_id = ?");
-    $stmt->bind_param("si", $status, $id);
-    
-    if ($stmt->execute()) {
-        Response::success('Order status updated');
-    } else {
-        Response::error('Failed to update order status');
-    }
-}
+// Get user orders
+$stmt = $pdo->prepare("
+    SELECT o.*, 
+           COUNT(oi.order_item_id) as item_count,
+           SUM(oi.quantity) as items_total
+    FROM orders o
+    LEFT JOIN order_items oi ON o.order_id = oi.order_id
+    WHERE o.user_id = ?
+    GROUP BY o.order_id
+    ORDER BY o.order_date DESC
+");
+$stmt->execute([$user_id]);
+$orders = $stmt->fetchAll();
+
+// Get order statistics
+$total_orders = count($orders);
+$pending_orders = array_filter($orders, function($order) {
+    return $order['status'] === 'pending';
+});
+$delivered_orders = array_filter($orders, function($order) {
+    return $order['status'] === 'delivered';
+});
+
+// CSRF token for any future form submissions
+$csrf_token = generateCsrfToken();
 ?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?php echo $page_title; ?> - Francoder Electronics</title>
+    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .orders-container {
+            margin: 30px 0;
+        }
+        
+        .stats-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            text-align: center;
+        }
+        
+        .stat-card h3 {
+            font-size: 1.8rem;
+            color: #2c3e50;
+            margin: 10px 0 5px 0;
+        }
+        
+        .stat-card p {
+            color: #7f8c8d;
+            font-size: 0.95rem;
+        }
+        
+        .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto;
+            font-size: 1.5rem;
+            color: white;
+        }
+        
+        .icon-total { background: #3498db; }
+        .icon-pending { background: #f39c12; }
+        .icon-delivered { background: #2ecc71; }
+        
+        .orders-table {
+            width: 100%;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            border-collapse: collapse;
+        }
+        
+        .orders-table th {
+            background: #f8f9fa;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #2c3e50;
+            border-bottom: 2px solid #e9ecef;
+        }
+        
+        .orders-table td {
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .orders-table tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-processing { background: #d1ecf1; color: #0c5460; }
+        .status-shipped { background: #cce5ff; color: #004085; }
+        .status-delivered { background: #d4edda; color: #155724; }
+        .status-cancelled { background: #f8d7da; color: #721c24; }
+        
+        .empty-orders {
+            text-align: center;
+            padding: 60px 20px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        }
+        
+        .empty-orders i {
+            font-size: 4rem;
+            color: #bdc3c7;
+            margin-bottom: 20px;
+        }
+        
+        .empty-orders h2 {
+            color: #34495e;
+            margin-bottom: 15px;
+        }
+        
+        .empty-orders p {
+            color: #7f8c8d;
+            margin-bottom: 25px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .btn-sm {
+            padding: 8px 12px;
+            font-size: 0.85rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .btn-danger {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.3s;
+        }
+        
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+        
+        @media (max-width: 768px) {
+            .orders-table {
+                display: block;
+                overflow-x: auto;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+            }
+            
+            .btn-sm {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <?php include 'includes/header.php'; ?>
+    
+    <main class="container">
+        <div class="page-header">
+            <h1>My Orders</h1>
+            <p>Track and manage your purchases</p>
+        </div>
+        
+        <?php if ($error): ?>
+            <div class="alert error">
+                <i class="fas fa-exclamation-circle"></i> <?php echo $error; ?>
+            </div>
+        <?php endif; ?>
+        
+        <?php if ($success): ?>
+            <div class="alert success">
+                <i class="fas fa-check-circle"></i> <?php echo $success; ?>
+            </div>
+        <?php endif; ?>
+        
+        <!-- Statistics -->
+        <div class="stats-cards">
+            <div class="stat-card">
+                <div class="stat-icon icon-total">
+                    <i class="fas fa-shopping-bag"></i>
+                </div>
+                <h3><?php echo $total_orders; ?></h3>
+                <p>Total Orders</p>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon icon-pending">
+                    <i class="fas fa-clock"></i>
+                </div>
+                <h3><?php echo count($pending_orders); ?></h3>
+                <p>Pending Orders</p>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon icon-delivered">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <h3><?php echo count($delivered_orders); ?></h3>
+                <p>Delivered Orders</p>
+            </div>
+        </div>
+        
+        <!-- Orders List -->
+        <div class="orders-container">
+            <?php if (empty($orders)): ?>
+                <div class="empty-orders">
+                    <i class="fas fa-box-open"></i>
+                    <h2>No Orders Yet</h2>
+                    <p>You haven't placed any orders yet. Start shopping to see your orders here!</p>
+                    <a href="products.php" class="btn-primary">
+                        <i class="fas fa-shopping-cart"></i> Start Shopping
+                    </a>
+                </div>
+            <?php else: ?>
+                <table class="orders-table">
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Date</th>
+                            <th>Items</th>
+                            <th>Total Amount</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($orders as $order): ?>
+                        <tr>
+                            <td>
+                                <strong>#<?php echo str_pad($order['order_id'], 6, '0', STR_PAD_LEFT); ?></strong>
+                            </td>
+                            <td>
+                                <?php echo date('M d, Y', strtotime($order['order_date'])); ?><br>
+                                <small style="color: #7f8c8d;">
+                                    <?php echo date('h:i A', strtotime($order['order_date'])); ?>
+                                </small>
+                            </td>
+                            <td>
+                                <?php echo $order['item_count']; ?> item(s)<br>
+                                <small style="color: #7f8c8d;">
+                                    <?php echo $order['items_total']; ?> total qty
+                                </small>
+                            </td>
+                            <td style="font-weight: 600; color: #2c3e50;">
+                                $<?php echo number_format($order['total_amount'], 2); ?>
+                            </td>
+                            <td>
+                                <span class="status-badge status-<?php echo $order['status']; ?>">
+                                    <?php echo ucfirst($order['status']); ?>
+                                </span>
+                                <?php if ($order['status'] === 'shipped'): ?>
+                                    <br><small style="color: #7f8c8d; font-size: 0.8rem;">
+                                        <i class="fas fa-truck"></i> Shipped on <?php echo date('M d', strtotime($order['updated_at'])); ?>
+                                    </small>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <div class="action-buttons">
+                                    <a href="order-details.php?id=<?php echo $order['order_id']; ?>" 
+                                       class="btn-secondary btn-sm">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                    
+                                    <?php if (canCancelOrder($order['status'])): ?>
+                                        <a href="cancel-order.php?id=<?php echo $order['order_id']; ?>" 
+                                           class="btn-danger btn-sm"
+                                           onclick="return confirm('Are you sure you want to cancel order #<?php echo str_pad($order['order_id'], 6, '0', STR_PAD_LEFT); ?>?');">
+                                            <i class="fas fa-times"></i> Cancel
+                                        </a>
+                                    <?php endif; ?>
+                                    
+                                    <?php if ($order['status'] === 'delivered'): ?>
+                                        <a href="order-review.php?id=<?php echo $order['order_id']; ?>" 
+                                           class="btn-secondary btn-sm">
+                                            <i class="fas fa-star"></i> Review
+                                        </a>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                
+                <!-- Order Status Legend -->
+                <div style="margin-top: 30px; padding: 15px; background: #f8f9fa; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 15px; justify-content: center;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="status-badge status-pending" style="width: 20px; height: 20px;"></span>
+                        <span>Pending</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="status-badge status-processing" style="width: 20px; height: 20px;"></span>
+                        <span>Processing</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="status-badge status-shipped" style="width: 20px; height: 20px;"></span>
+                        <span>Shipped</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="status-badge status-delivered" style="width: 20px; height: 20px;"></span>
+                        <span>Delivered</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="status-badge status-cancelled" style="width: 20px; height: 20px;"></span>
+                        <span>Cancelled</span>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </div>
+        
+        <!-- Help Section -->
+        <div style="margin-top: 40px; padding: 25px; background: #f8f9fa; border-radius: 10px;">
+            <h3 style="margin-bottom: 15px; color: #2c3e50;">
+                <i class="fas fa-question-circle"></i> Need Help With Your Orders?
+            </h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
+                <div>
+                    <h4 style="color: #3498db; margin-bottom: 10px;">
+                        <i class="fas fa-shipping-fast"></i> Shipping Information
+                    </h4>
+                    <p style="color: #666; font-size: 0.95rem;">
+                        Standard shipping: 3-5 business days<br>
+                        Express shipping: 1-2 business days<br>
+                        Free shipping on orders over $100
+                    </p>
+                </div>
+                
+                <div>
+                    <h4 style="color: #3498db; margin-bottom: 10px;">
+                        <i class="fas fa-undo"></i> Returns & Refunds
+                    </h4>
+                    <p style="color: #666; font-size: 0.95rem;">
+                        30-day return policy<br>
+                        Free returns for defective items<br>
+                        Refunds processed within 5-7 business days
+                    </p>
+                </div>
+                
+                <div>
+                    <h4 style="color: #3498db; margin-bottom: 10px;">
+                        <i class="fas fa-headset"></i> Contact Support
+                    </h4>
+                    <p style="color: #666; font-size: 0.95rem;">
+                        Email: support@francoder.com<br>
+                        Phone: (555) 123-4567<br>
+                        Hours: Mon-Fri, 9am-6pm EST
+                    </p>
+                </div>
+            </div>
+        </div>
+    </main>
+    
+    <?php include 'includes/footer.php'; ?>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add confirmation for all cancel links
+            const cancelLinks = document.querySelectorAll('a.btn-danger');
+            cancelLinks.forEach(link => {
+                link.addEventListener('click', function(e) {
+                    if (!confirm('Are you sure you want to cancel this order? This action cannot be undone.')) {
+                        e.preventDefault();
+                    }
+                });
+            });
+            
+            // Status update notifications
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('cancelled')) {
+                showNotification('Order cancelled successfully', 'success');
+            }
+            if (urlParams.has('error')) {
+                showNotification('Failed to cancel order', 'error');
+            }
+            
+            function showNotification(message, type) {
+                const notification = document.createElement('div');
+                notification.className = `notification ${type}`;
+                notification.textContent = message;
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    padding: 15px 25px;
+                    border-radius: 6px;
+                    z-index: 9999;
+                    color: white;
+                    font-weight: 600;
+                    background-color: ${type === 'success' ? '#2ecc71' : '#e74c3c'};
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                    animation: slideIn 0.3s ease;
+                `;
+                
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    notification.style.opacity = '0';
+                    notification.style.transform = 'translateX(100px)';
+                    setTimeout(() => notification.remove(), 300);
+                }, 3000);
+            }
+            
+            // Add animation style
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes slideIn {
+                    from {
+                        opacity: 0;
+                        transform: translateX(100px);
+                    }
+                    to {
+                        opacity: 1;
+                        transform: translateX(0);
+                    }
+                }
+            `;
+            document.head.appendChild(style);
+        });
+    </script>
+</body>
+</html>
