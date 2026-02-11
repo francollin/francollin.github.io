@@ -10,7 +10,7 @@ if (session_status() === PHP_SESSION_NONE) {
 define('DB_HOST', 'localhost');
 define('DB_USER', 'root');
 define('DB_PASS', '');
-define('DB_NAME', 'ecommerce_db');
+define('DB_NAME', 'ecommerce');
 
 // Security Configuration
 define('JWT_SECRET', 'your-secret-key-change-this-in-production');
